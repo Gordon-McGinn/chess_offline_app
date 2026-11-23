@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Chess</title>
+  <!-- Home-screen app settings (iPhone: Share → Add to Home Screen) -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Chess">
+  <meta name="theme-color" content="#1b1a19">
+  <style>
+    :root {
+      /* One square's size. Every square uses exactly this, so they're always even. */
+      --sq: calc(min(92vw, 78vh, 640px) / 8);
+      --light: #ecdab9;
+      --dark: #ae8a68;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      /* Keep clear of the iPhone notch and home bar. */
+      padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+               max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+      background: radial-gradient(circle at top, #34312e, #1b1a19) fixed #1b1a19;
+      touch-action: manipulation;          /* no double-tap zoom when tapping quickly */
+      -webkit-tap-highlight-color: transparent;
+      -webkit-user-select: none;
+      user-select: none;
+      color: #eee;
+      font-family: system-ui, "Segoe UI", sans-serif;
+    }
+    #status {
+      font-size: 17px;
+      font-weight: 600;
+      padding: 8px 18px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+    #board {
+      display: grid;
+      grid-template-columns: repeat(8, var(--sq));
+      grid-template-rows: repeat(8, var(--sq));
+      border-radius: 6px;
+      overflow: hidden;
+      box-shadow: 0 0 0 6px #4a3b2e, 0 18px 40px rgba(0, 0, 0, 0.6);
+    }
+    .sq {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      user-select: none;
+    }
+    .light { background: var(--light); }
+    .dark  { background: var(--dark); }
+    .last.light { background: #f3e08a; }
+    .last.dark  { background: #d2b54f; }
+    .selected   { background: #8fbf5a !important; }
+    .check      { box-shadow: inset 0 0 calc(var(--sq) * 0.35) calc(var(--sq) * 0.12) #e53935; }
+
+    /* Pieces: one font for all, sized from the square, never larger than it. */
+    .piece {
+      font-family: "Segoe UI Symbol", "Noto Sans Symbols 2", "DejaVu Sans", serif;
+      font-size: calc(var(--sq) * 0.9);
+      line-height: 1;
+      pointer-events: none;
+    }
+    .white-piece { color: #fbfbf8; filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000) drop-shadow(0 2px 2px rgba(0,0,0,.45)); }
+    .black-piece { color: #222; filter: drop-shadow(0 0 1px rgba(255,255,255,.35)) drop-shadow(0 2px 2px rgba(0,0,0,.45)); }
+
+    .target::after {             /* dot on squares you can move to */
+      content: '';
+      position: absolute;
+      width: 30%;
+      height: 30%;
+      border-radius: 50%;
+      background: rgba(20, 30, 20, 0.28);
+    }
+    .target.capture::after {     /* ring on pieces you can capture */
+      width: 92%;
+      height: 92%;
+      background: none;
+      border: calc(var(--sq) * 0.08) solid rgba(20, 30, 20, 0.28);
+    }
+
+    /* a–h and 1–8 labels in the board's corner squares */
+    .coord {
+      position: absolute;
+      font-size: calc(var(--sq) * 0.18);
+      font-weight: 700;
+      pointer-events: none;
+    }
+    .coord.file { right: 4%; bottom: 2%; }
+    .coord.rank { left: 4%; top: 2%; }
+    .light .coord { color: var(--dark); }
+    .dark .coord  { color: var(--light); }
+
+    #controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+    button, select {
+      font: inherit;
+      font-size: 14px;
+      padding: 8px 14px;
+      border: none;
+      border-radius: 8px;
+      background: #3d3a36;
+      color: #eee;
+      cursor: pointer;
+    }
+    button:hover, select:hover { background: #4d4943; }
+  </style>
+</head>
+<body>
+  <div id="status"></div>
+  <div id="board"></div>
+  <div id="controls">
+    <button onclick="newGame('w')">New game as White</button>
+    <button onclick="newGame('b')">New game as Black</button>
+    <button onclick="undo()">Undo</button>
+    <select id="level" title="Bot strength">
+      <option value="1">Easy</option>
+      <option value="2">Medium</option>
+      <option value="3" selected>Hard</option>
+    </select>
+  </div>
+
+  <script src="chess.js"></script>
+  <script src="bot.js"></script>
+  <script>
+    // ---- UI: draws the board and handles clicks. Rules live in chess.js, the bot in bot.js. ----
+
+    // ︎ asks for the plain text glyph, not an emoji (matters for the pawn on Windows).
+    const GLYPH = { p: '♟', n: '♞', b: '♝', r: '♜', q: '♛', k: '♚' };
+
+    const boardEl = document.getElementById('board');
+    const statusEl = document.getElementById('status');
+    const levelEl = document.getElementById('level');
+
+    let game;           // current state from chess.js
+    let history;        // previous { game, lastMove } entries, for undo
+    let lastMove;       // highlighted on the board
+    let playerColor;    // 'w' or 'b'
+    let selected;       // square index the player has clicked, or null
+    let thinking;       // true while the bot is working
+
+    function newGame(color) {
+      game = Chess.newGame();
+      history = [];
+      lastMove = null;
+      playerColor = color;
+      selected = null;
+      thinking = false;
+      render();
+      if (color === 'b') botMove();
+    }
+
+    const isOver = () => ['checkmate', 'stalemate', 'draw'].includes(Chess.status(game));
+
+    function play(move) {
+      history.push({ game, lastMove });
+      game = Chess.makeMove(game, move);
+      lastMove = move;
+    }
+
+    function botMove() {
+      thinking = true;
+      render();
+      // Small delay so the browser can draw the player's move before the bot starts thinking.
+      setTimeout(() => {
+        const move = Bot.bestMove(game, Number(levelEl.value));
+        if (move) play(move);
+        thinking = false;
+        render();
+      }, 50);
+    }
+
+    function undo() {
+      if (thinking) return;
+      // Step back until it's the player's turn again (usually two half-moves).
+      do {
+        const prev = history.pop();
+        if (!prev) break;
+        ({ game, lastMove } = prev);
+      } while (game.turn !== playerColor);
+      selected = null;
+      if (game.turn !== playerColor) botMove(); // back at the start as Black: bot moves again
+      else render();
+    }
+
+    function onSquareClick(i) {
+      if (thinking || game.turn !== playerColor || isOver()) return;
+
+      if (selected !== null) {
+        const move = Chess.legalMoves(game).find((m) => m.from === selected && m.to === i);
+        if (move) {
+          play(move);
+          selected = null;
+          render();
+          if (!isOver()) botMove();
+          return;
+        }
+      }
+      const piece = game.board[i];
+      selected = piece && Chess.colorOf(piece) === playerColor && i !== selected ? i : null;
+      render();
+    }
+
+    function addLabel(sq, kind, text) {
+      const label = document.createElement('span');
+      label.className = 'coord ' + kind;
+      label.textContent = text;
+      sq.appendChild(label);
+    }
+
+    function render() {
+      const targets = selected === null ? [] :
+        Chess.legalMoves(game).filter((m) => m.from === selected).map((m) => m.to);
+      const status = Chess.status(game);
+      const checkedKing = status === 'check' || status === 'checkmate'
+        ? Chess.kingSquare(game.board, game.turn) : -1;
+
+      boardEl.innerHTML = '';
+      for (let k = 0; k < 64; k++) {
+        const i = playerColor === 'w' ? k : 63 - k; // flip the board when playing Black
+        const piece = game.board[i];
+        const sq = document.createElement('div');
+        sq.className = 'sq ' + (((i >> 3) + (i & 7)) % 2 ? 'dark' : 'light');
+        if (lastMove && (i === lastMove.from || i === lastMove.to)) sq.classList.add('last');
+        if (i === selected) sq.classList.add('selected');
+        if (i === checkedKing) sq.classList.add('check');
+        if (targets.includes(i)) sq.classList.add('target', ...(piece ? ['capture'] : []));
+        if (piece) {
+          const span = document.createElement('span');
+          span.className = 'piece ' + (Chess.colorOf(piece) === 'w' ? 'white-piece' : 'black-piece');
+          span.textContent = GLYPH[piece.toLowerCase()] + '︎';
+          sq.appendChild(span);
+        }
+        // Coordinates along the bottom row and left column (as seen by the player).
+        if (k >= 56) addLabel(sq, 'file', 'abcdefgh'[i & 7]);
+        if (k % 8 === 0) addLabel(sq, 'rank', 8 - (i >> 3));
+        sq.onclick = () => onSquareClick(i);
+        boardEl.appendChild(sq);
+      }
+
+      const side = game.turn === 'w' ? 'White' : 'Black';
+      const other = game.turn === 'w' ? 'Black' : 'White';
+      statusEl.textContent =
+        status === 'checkmate' ? `Checkmate — ${other} wins!` :
+        status === 'stalemate' ? 'Stalemate — draw.' :
+        status === 'draw'      ? 'Draw — only kings left.' :
+        thinking               ? 'Bot is thinking…' :
+        status === 'check'     ? `${side} is in check.` :
+                                 `${side} to move.`;
+    }
+
+    newGame('w');
+
+    // Offline support (only works when served over https or localhost, not from a double-clicked file).
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  </script>
+</body>
+</html>
