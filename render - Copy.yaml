@@ -1,0 +1,12 @@
+# Render Blueprint: deploys /public as a free static site. No build step needed.
+services:
+  - type: web
+    name: chess
+    runtime: static
+    buildCommand: echo "No build step"
+    staticPublishPath: ./public
+    headers:
+      # Always re-check the offline worker so phones pick up new versions of the game.
+      - path: /sw.js
+        name: Cache-Control
+        value: no-cache
